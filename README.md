@@ -4,21 +4,26 @@ E-Commerce Order Management & Search Service
 A full-stack ecommerce application with:
 
 - Vue 3 storefront
-- FastAPI backend
+- Spring Boot (Java 17) backend
 - PostgreSQL for users, orders, order items, and outbox events
 - MongoDB for the product catalog
 - Elasticsearch for admin order search
-- RabbitMQ and Celery for asynchronous order synchronization
+- RabbitMQ with a Spring AMQP listener for asynchronous order synchronization
 - Nginx for serving the frontend and proxying API requests
 
 Run With Docker
+
+Build the backend jar first (the Docker image copies it):
+
+```powershell
+mvn -f backend-java\pom.xml -DskipTests package
+```
 
 Start Docker Desktop first.
 
 From the project directory:
 
 ```powershell
-cd "C:\Users\Dell\Downloads\ecommerce-order-management-friend-clean-baseline\ecommerce-order-management-friend-clean-baseline"
 docker compose up -d
 ```
 
@@ -43,26 +48,24 @@ http://127.0.0.1:15672
 The current Docker Compose stack starts:
 
 - Frontend/Nginx
-- FastAPI backend
+- Spring Boot backend (HTTP API, RabbitMQ listener, and the 15s outbox drain in one process)
 - PostgreSQL
 - MongoDB
 - Elasticsearch
 - RabbitMQ
-- Celery worker
-- Celery beat
 
 ## First-Time Database Setup
 
 If the database volumes are empty, apply the PostgreSQL schema:
 
 ```powershell
-Get-Content .\backend\sql\001_schema.sql | docker compose exec -T postgres psql -U ecommerce -d ecommerce
+Get-Content .\backend-java\src\main\resources\db\001_schema.sql | docker compose exec -T postgres psql -U ecommerce -d ecommerce
 ```
 
 Seed the demo data:
 
 ```powershell
-docker compose exec backend python -m scripts.seed --reset
+docker compose exec backend java -jar /app/app.jar --app.seed.run=true --app.seed.reset=true --spring.main.web-application-type=none
 ```
 
 The seed creates:
@@ -146,7 +149,7 @@ Outbox event
 RabbitMQ
         |
         v
-Celery worker
+Spring AMQP listener
         |
         v
 Elasticsearch order projection
@@ -188,12 +191,6 @@ View backend logs:
 docker compose logs -f backend
 ```
 
-View worker logs:
-
-```powershell
-docker compose logs -f celery-worker
-```
-
 View frontend logs:
 
 ```powershell
@@ -217,21 +214,23 @@ Do not remove Docker volumes unless you intentionally want to delete the databas
 
 ## Backend Tests
 
-Run the backend tests:
+## Backend Tests
 
-```powershell
-cd backend
-python -m pytest tests/
-```
+The Java/Spring Boot backend is the active and only backend implementation in
+this repository. The backend tests run from `backend-java/` and cover the API
+contract, search behavior, seed determinism, PostgreSQL guarantees, and outbox
+durability.
 
-The tests use real PostgreSQL, MongoDB, Elasticsearch, and RabbitMQ services.
+Run the backend tests with:
+
+```bash
+mvn -f backend-java/pom.xml clean test
 
 ## Important Data Rules
 
 - PostgreSQL owns users, orders, order items, statuses, money, versions, and outbox events.
 - MongoDB owns products.
-- Elasticsearch only stores order search projections.
-- Product titles and prices are copied into order items during checkout.
+- Elasticsearch only stores order search projections.- Product titles and prices are copied into order items during checkout.
 - Historical order snapshots must not be replaced with current catalog data.
 - PostgreSQL order versions protect Elasticsearch from stale writes.
 - Outbox events are created inside the same transaction as the order.

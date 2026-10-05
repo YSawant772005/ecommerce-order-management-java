@@ -29,3 +29,6 @@ dist/
 
 # Superpowers SDD workspace (ledger, briefs, review packages)
 .superpowers/
+
+# Java / Maven
+backend-java/target/

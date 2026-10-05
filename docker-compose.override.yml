@@ -1,8 +1,10 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend-java/Dockerfile
     container_name: ecommerce-backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: java -jar /app/app.jar
     ports:
       - "8000:8000"
     environment:
@@ -26,32 +28,6 @@ services:
       timeout: 5s
       retries: 20
 
-  celery-worker:
-    build: ./backend
-    container_name: ecommerce-celery-worker
-    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info
-    environment:
-      PG_DSN: postgresql://ecommerce:ecommerce@postgres:5432/ecommerce
-      MONGO_DSN: mongodb://mongo:27017
-      MONGO_DB_NAME: ecommerce
-      ES_URL: http://elasticsearch:9200
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
-    depends_on:
-      - backend
-
-  celery-beat:
-    build: ./backend
-    container_name: ecommerce-celery-beat
-    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
-    environment:
-      PG_DSN: postgresql://ecommerce:ecommerce@postgres:5432/ecommerce
-      MONGO_DSN: mongodb://mongo:27017
-      MONGO_DB_NAME: ecommerce
-      ES_URL: http://elasticsearch:9200
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
-    depends_on:
-      - backend
-
   frontend:
     build: ./frontend
     container_name: ecommerce-frontend
@@ -59,3 +35,17 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
+  # The integration tests in backend-java run on the host (via Maven) and need a
+  # real PostgreSQL. Port 5432 on this host is already taken by a native
+  # PostgreSQL install, so the container also publishes 55433 for the test
+  # suite to connect to. The application itself still uses the in-network 5432.
+  postgres-test-port:
+    image: alpine/socat
+    container_name: ecommerce-postgres-proxy
+    depends_on:
+      - postgres
+    entrypoint: ["sh", "-c", "apk add --no-cache socat >/dev/null 2>&1; exec socat TCP-LISTEN:5432,fork,reuseaddr TCP:postgres:5432"]
+    ports:
+      - "55433:5432"
+    restart: unless-stopped

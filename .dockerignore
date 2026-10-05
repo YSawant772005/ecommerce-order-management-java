@@ -8,3 +8,5 @@ __pycache__/
 venv/
 .git/
 frontend/node_modules/
+# NOTE: backend-java/target/ is deliberately NOT ignored — the image copies the
+# built jar from there.

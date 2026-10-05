@@ -31,7 +31,7 @@ CREATE DATABASE ecommerce OWNER ecommerce;
 SQL
 fi
 export PGPASSWORD=ecommerce
-psql -h 127.0.0.1 -p 5432 -U ecommerce -d ecommerce -f /app/backend/sql/001_schema.sql >/dev/null
+psql -h 127.0.0.1 -p 5432 -U ecommerce -d ecommerce -f /app/sql/001_schema.sql >/dev/null
 
 for _ in $(seq 1 45); do (exec 3<>/dev/tcp/127.0.0.1/27017) 2>/dev/null && break; sleep 2; done
 for _ in $(seq 1 90); do curl -fsS http://127.0.0.1:9200/ >/dev/null 2>&1 && break; sleep 2; done
@@ -39,7 +39,9 @@ for _ in $(seq 1 45); do curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2
 
 USERS=$(psql -h 127.0.0.1 -p 5432 -U ecommerce -d ecommerce -tAc "SELECT count(*) FROM users" | tr -d ' ')
 if [ "$USERS" = "0" ]; then
-  cd /app/backend && /opt/venv/bin/python -m scripts.seed --reset >>/data/logs/seed.log 2>&1 || tail -20 /data/logs/seed.log
+  java -jar /app/app.jar --app.seed.run=true --app.seed.reset=true \
+       --spring.main.web-application-type=none >>/data/logs/seed.log 2>&1 \
+    || tail -20 /data/logs/seed.log
 fi
 echo "single container ready: users=$USERS"
 wait "$SUP_PID"

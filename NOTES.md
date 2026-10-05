@@ -4,8 +4,9 @@
 
 PG stays authoritative; Screen 4 correct, Screen 3 stale. Each order's
 outbox row stays unprocessed with `attempts`/`last_error`. On recovery the
-15s beat drain replays the gap; `POST /api/sync/reindex` repairs anything
-terminal. Verified in `test_es_outage_is_retried_then_terminal`.
+15s scheduled drain replays the gap; `POST /api/sync/reindex` repairs anything
+terminal. Verified in `test_es_outage_is_retried_then_terminal` (Python
+reference suite; the Java port keeps the same outbox semantics).
 
 ## 2. Why not SQL search
 

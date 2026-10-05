@@ -4,11 +4,11 @@
 
 **Architecture (locked):**
 ```
-Vue 3 + Vite → FastAPI → ┬─ MongoDB  (product catalog)
-                         └─ PostgreSQL (orders / users / source of truth)
-                                │ COMMIT
-                                ▼
-                             Outbox ──► RabbitMQ ──► Celery ──► Elasticsearch ──► Admin Search
+Vue 3 + Vite → Spring Boot → ┬─ MongoDB  (product catalog)
+                             └─ PostgreSQL (orders / users / source of truth)
+                                    │ COMMIT
+                                    ▼
+                                 Outbox ──► RabbitMQ ──► Spring AMQP listener ──► Elasticsearch ──► Admin Search
 ```
 
 **Strategy:** **Strategy 1 only — asynchronous queued dual-write synchronization.**
@@ -20,12 +20,27 @@ Strategy 2 (periodic polling) is **NOT** implemented and is **NOT** configurable
 - MongoDB = Product Catalog
 - PostgreSQL = source of truth for orders, order items, users, status, money, fulfillment
 - Elasticsearch = search/indexing projection for Admin Order Search
-- RabbitMQ = message broker / transport · Celery = background task execution
+- RabbitMQ = message broker / transport · Spring AMQP listener = background task execution
 - Outbox = reliable event record for Strategy 1
 - Canonical projection = `build_order_document()`
 - The sync is **asynchronous queued dual-write synchronization**. Never "simultaneous dual write".
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` completed **and verified** · `[!]` blocked
+
+---
+
+## Phase 25 — Python → Java backend migration — `[x]`
+- [x] Spring Boot 3.5.6 / Java 17 project in `backend-java/` (pom, app, config)
+- [x] Same 13 routes, verbs, status codes and JSON contract (`_id`, `sync_status`, string money, `{"detail": ...}` errors, 422 on unknown body keys)
+- [x] Same store responsibilities: PostgreSQL (JdbcTemplate), MongoDB (MongoTemplate + `Decimal128`), Elasticsearch (raw REST, same JSON bodies)
+- [x] `buildOrderDocument()` remains the only producer of an Elasticsearch order document; snapshots win over the live catalog
+- [x] Celery → Spring AMQP: `RabbitTemplate` producer, `@RabbitListener` consumer, `@Scheduled(fixedDelay=15000)` outbox drain
+- [x] Same env var contract (`PG_DSN`, `MONGO_DSN`, `MONGO_DB_NAME`, `ES_URL`, `ES_ORDERS_INDEX`, `RABBITMQ_URL`, `CORS_ORIGINS`, `SEED_*`)
+- [x] Java seed (`SeedPlan` + `SeedService`) reproducing 8 users / 25 products / 40 orders plus the 18-invariant verifier and the snapshot-mismatch fixture
+- [x] `docker-compose.override.yml` and the single-container `Dockerfile`/`supervisord.conf`/`entrypoint.sh` run the jar (worker + beat collapse into one process)
+- [x] JUnit suite green: JSON contract, money rule, health shape, 422 rejection, seed determinism (14 tests)
+- [x] Python `backend/` and its pytest suite retained as the reference implementation
+- [x] Frontend untouched — same origin, same routes, same response fields
 
 ---
 
@@ -54,7 +69,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` completed **and verified
 - [x] `scripts/dev-stack.sh` — native real-service control (start/stop/status/reset-data/logs)
 
 ## Phase 2 — PostgreSQL — `[x]`
-- [x] `backend/sql/001_schema.sql`: `users`, `orders`, `order_items`, `outbox`
+- [x] `backend-java/src/main/resources/db/001_schema.sql`: `users`, `orders`, `order_items`, `outbox` (Java-owned; moved out of `backend/sql/`)
 - [x] PKs, FKs, indexes, CHECK constraints; `NUMERIC(12,2)` money
 - [x] `orders_touch()` plpgsql + `orders_touch_trg` BEFORE UPDATE owning `updated_at` + `version`
 - [x] `app/core/postgres.py` → `get_pool()`, `close_pool()`

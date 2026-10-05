@@ -1,4 +1,4 @@
-# The four required data stores plus RabbitMQ. FastAPI, Celery and Vite run on
+# The four required data stores plus RabbitMQ. The Spring Boot backend runs on
 # the host (see README).
 #
 # Elasticsearch needs four settings to survive a laptop: single-node discovery,

@@ -1,5 +1,8 @@
 # Single-container image: PostgreSQL + MongoDB + Elasticsearch + RabbitMQ +
-# FastAPI + Celery worker/beat + nginx, supervised together.
+# Spring Boot API (API + RabbitMQ worker + outbox scheduler in one process) +
+# nginx, supervised together.
+#
+# Build the jar first:  mvn -f backend-java/pom.xml -DskipTests package
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -7,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     postgresql-16 rabbitmq-server supervisor nginx curl \
-    python3 python3-venv ca-certificates \
+    openjdk-17-jre-headless \
   && rm -rf /var/lib/apt/lists \
   && useradd -m -s /bin/bash es
 
@@ -19,13 +22,11 @@ RUN curl -fsSL https://artifacts.elastic.co/downloads/elasticsearch/elasticsearc
   && mkdir -p /opt/es && tar -xzf /tmp/es.tgz -C /opt/es --strip-components=1 \
   && rm /tmp/es.tgz && chown -R es:es /opt/es
 
-RUN python3 -m venv /opt/venv \
-  && /opt/venv/bin/pip install -q --upgrade pip
-
-COPY backend/requirements.txt /tmp/requirements.txt
-RUN /opt/venv/bin/pip install -q -r /tmp/requirements.txt
-
-COPY backend /app/backend
+COPY backend-java/target/order-management-1.0.0.jar /app/app.jar
+# The schema is Java-owned and also ships inside the jar as a classpath resource.
+# It is copied out here so deploy/entrypoint.sh can apply it with psql before
+# the JVM starts.
+COPY backend-java/src/main/resources/db/001_schema.sql /app/sql/001_schema.sql
 COPY frontend/dist /usr/share/nginx/html
 COPY deploy/nginx.single.conf /etc/nginx/sites-available/app
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/app.conf

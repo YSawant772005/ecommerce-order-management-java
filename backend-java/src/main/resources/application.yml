@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: ecommerce-order-management
+
+  # Unknown request-body keys are a configuration error, exactly like the
+  # former FastAPI `extra="forbid"` models (POST /api/orders, PATCH status,
+  # POST search, product create/update). The advice maps the resulting
+  # HttpMessageNotReadableException to 422.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+
+  data:
+    mongodb:
+      uri: ${MONGO_DSN:mongodb://127.0.0.1:27017}
+      database: ${MONGO_DB_NAME:ecommerce}
+      # Server/socket timeouts are applied by ElasticsearchConfig's
+      # MongoClientSettingsBuilderCustomizer: an explicit `uri` overrides the
+      # `options` block here.
+
+  elasticsearch:
+    uris: ${ES_URL:http://127.0.0.1:9200}
+    connection-timeout: 5s
+    socket-timeout: 30s
+
+server:
+  port: ${API_PORT:8000}
+
+# The same environment variable names the former FastAPI backend used, so the
+# Compose files, .env.example and the single-container entrypoint keep working.
+app:
+  pg-dsn: ${PG_DSN:postgresql://ecommerce:ecommerce@127.0.0.1:55432/ecommerce}
+  rabbitmq-url: ${RABBITMQ_URL:amqp://guest:guest@127.0.0.1:5672//}
+  es-orders-index: ${ES_ORDERS_INDEX:orders}
+  cors-origins: ${CORS_ORIGINS:http://localhost:5173}
+  # Strategy 1 is the only implemented synchronization strategy; any other
+  # value is a startup error (see AppProperties validation).
+  order-sync-strategy: ${ORDER_SYNC_STRATEGY:dual_write}
+  order-sync-placement-status: ${ORDER_SYNC_PLACEMENT_STATUS:QUEUED}
+  seed-anchor-date: ${SEED_ANCHOR_DATE:2026-09-30T00:00:00Z}
+  seed-default: ${SEED_DEFAULT:42}
+
