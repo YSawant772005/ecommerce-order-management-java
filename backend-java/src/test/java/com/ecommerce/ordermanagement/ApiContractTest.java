@@ -64,9 +64,23 @@ class ApiContractTest {
     @Test
     void search_response_carries_revenue_and_facets_as_strings() throws Exception {
         SearchResponse response = new SearchResponse(
-                2, 1, 20, new BigDecimal("301.00"), Map.of("SHIPPED", 2L), List.of());
+                2, 1, 20, 1, false, new BigDecimal("301.00"),
+                Map.of("SHIPPED", 2L), List.of());
         String json = mapper.writeValueAsString(response);
         assertThat(json).contains("\"revenue\":\"301.00\"").contains("\"status_facets\":{\"SHIPPED\":2}");
+    }
+
+    @Test
+    void search_response_exposes_pagination_metadata_for_the_pager() throws Exception {
+        SearchResponse response = new SearchResponse(
+                327, 2, 25, 14, true, new BigDecimal("10.00"), Map.of(), List.of());
+        String json = mapper.writeValueAsString(response);
+        assertThat(json)
+                .contains("\"total\":327")
+                .contains("\"page\":2")
+                .contains("\"size\":25")
+                .contains("\"totalPages\":14")
+                .contains("\"hasNext\":true");
     }
 
     @Test

@@ -94,7 +94,11 @@ public class SeedService {
         return ids;
     }
 
-    /** 25 products: 6 named + 18 fillers (all active) and 1 inactive. */
+    /**
+     * The whole catalog: 6 named + 18 fillers (all active), 1 inactive, and the
+     * deterministic generated expansion. The hand-written 25 are inserted first so
+     * the fixtures orders and tests depend on keep their existing identities.
+     */
     private void insertCatalog(long seed) {
         Random rng = new Random(seed);
         List<ProductSeed> specs = new ArrayList<>(SeedPlan.NAMED_PRODUCTS);
@@ -121,7 +125,35 @@ public class SeedService {
                 SeedPlan.INACTIVE_PRODUCT.attributes(),
                 List.of(new Variant(SeedPlan.INACTIVE_PRODUCT.sku() + "-V1", "grey", 0, null)),
                 Boolean.FALSE));
+
+        insertGeneratedCatalog(seed);
         products.ensureIndexes();
+    }
+
+    /**
+     * Bulk-insert the generated expansion. Uses the repository's bulk path rather
+     * than 3,500 individual inserts, so a fresh seed stays a matter of seconds.
+     * SKUs are {@code GEN-00000…}, deterministic and disjoint from the fixtures.
+     */
+    private void insertGeneratedCatalog(long seed) {
+        Random rng = new Random(seed ^ 0x9E37_79B9L);
+        List<ProductCreate> batch = new ArrayList<>(SeedPlan.GENERATED_COUNT);
+        for (ProductSeed spec : SeedPlan.generatedCatalog(seed)) {
+            batch.add(new ProductCreate(
+                    spec.sku(),
+                    spec.title(),
+                    describe(spec),
+                    new BigDecimal(spec.price()),
+                    spec.category(),
+                    spec.tags(),
+                    spec.attributes(),
+                    List.of(new Variant(spec.sku() + "-V1",
+                            String.valueOf(spec.attributes().get("color")),
+                            5 + rng.nextInt(46), null)),
+                    Boolean.TRUE));
+        }
+        products.createAll(batch);
+        log.info("inserted {} generated products into {}", batch.size(), ProductRepository.COLLECTION);
     }
 
     /** The two named products that ship with real variant arrays. */
@@ -144,13 +176,23 @@ public class SeedService {
     }
 
     /**
-     * Resolve each planned line against the <b>live</b> catalog and write the
+     * Build each planned line against the <b>live</b> catalog and write the
      * order plus its immutable snapshots. Totals are computed from the lines,
      * never generated.
      */
     private List<Long> insertOrders(long seed, OffsetDateTime anchor, List<Long> userIds) {
         Map<String, Product> byTitle = new LinkedHashMap<>();
-        for (Product product : products.list(null, null, Boolean.TRUE, 0, 100).items()) {
+        // The order plan only references the 25 hand-written seeds, and the
+        // generated expansion now contains thousands of similar titles ("Wireless
+        // Mouse Mk II" beside "Wireless Mouse"). Resolve by exact SKU — unique
+        // index, no regex — so a neighbouring title can never be picked up.
+        List<SeedPlan.ProductSeed> planned = new ArrayList<>(SeedPlan.NAMED_PRODUCTS);
+        planned.addAll(SeedPlan.FILLERS);
+        for (SeedPlan.ProductSeed spec : planned) {
+            Product product = products.getBySku(spec.sku());
+            if (product == null) {
+                throw new IllegalStateException("catalog is missing planned product " + spec.sku());
+            }
             byTitle.put(product.title(), product);
         }
 
@@ -158,12 +200,12 @@ public class SeedService {
         for (OrderSpec spec : SeedPlan.buildOrderPlan(seed, anchor)) {
             List<Line> lines = new ArrayList<>();
             BigDecimal total = BigDecimal.ZERO;
-            for (SeedPlan.Line planned : spec.lines()) {
-                String title = SeedPlan.titleFor(planned.productIndex());
+            for (SeedPlan.Line plannedLine : spec.lines()) {
+                String title = SeedPlan.titleFor(plannedLine.productIndex());
                 Product product = byTitle.get(title);
                 BigDecimal unit = product.price();
-                lines.add(new Line(product.id(), title, planned.quantity(), unit));
-                total = total.add(unit.multiply(BigDecimal.valueOf(planned.quantity())));
+                lines.add(new Line(product.id(), title, plannedLine.quantity(), unit));
+                total = total.add(unit.multiply(BigDecimal.valueOf(plannedLine.quantity())));
             }
             total = total.setScale(2, RoundingMode.HALF_UP);
 
@@ -215,32 +257,68 @@ public class SeedService {
         long users = jdbc.queryForObject("SELECT count(*) FROM users", Long.class);
         check(report, failures, "8 users", users == 8, users);
 
-        var page = products.list(null, null, null, 0, 100);
-        check(report, failures, "25 products", page.total() == 25, page.total());
-        long activeCount = page.items().stream().filter(Product::active).count();
-        check(report, failures, "24 active", activeCount == 24, activeCount);
+        // Catalog size is now 25 hand-written fixtures + the generated expansion.
+        var all = products.list(null, null, null, 0, 1);
+        check(report, failures, SeedPlan.EXPECTED_PRODUCTS + " products",
+                all.total() == SeedPlan.EXPECTED_PRODUCTS, all.total());
+
+        // The hand-written fixtures must all still exist, with the right active flag.
+        // Checked by SKU, not by page scan: the generated catalog now shares the
+        // title-sorted listing, so "the first 25" is no longer the fixture set.
+        List<SeedPlan.ProductSeed> fixtureSpecs = new ArrayList<>(SeedPlan.NAMED_PRODUCTS);
+        fixtureSpecs.addAll(SeedPlan.FILLERS);
+        long fixturesPresent = fixtureSpecs.stream()
+                .filter(s -> {
+                    Product p = products.getBySku(s.sku());
+                    return p != null && p.active();
+                })
+                .count();
+        check(report, failures, "25 fixture products still active",
+                fixturesPresent == fixtureSpecs.size(), fixturesPresent);
+        check(report, failures, "inactive fixture still present",
+                products.getBySku(SeedPlan.INACTIVE_PRODUCT.sku()) != null,
+                SeedPlan.INACTIVE_PRODUCT.sku());
+
+        check(report, failures, "inactive product hidden from default listing",
+                products.list(null, null, Boolean.TRUE, 0, 1).total()
+                        == SeedPlan.EXPECTED_PRODUCTS - 1,
+                products.list(null, null, Boolean.TRUE, 0, 1).total());
 
         for (String category : SeedPlan.CATEGORIES) {
-            long inCategory = products.list(null, category, Boolean.TRUE, 0, 100).total();
+            long inCategory = products.list(null, category, Boolean.TRUE, 0, 1).total();
             check(report, failures, "category " + category + " >= 5", inCategory >= 5, inCategory);
         }
 
-        long wireless = page.items().stream()
+        // Price-band and wireless invariants run over the 25 fixtures, which is
+        // what they always meant. Resolving by SKU keeps them independent of the
+        // generated catalog, which now shares the title-sorted listing.
+        List<Product> fixtures = fixtureSpecs.stream()
+                .map(s -> products.getBySku(s.sku()))
+                .filter(java.util.Objects::nonNull)
                 .filter(Product::active)
+                .toList();
+
+        long wireless = fixtures.stream()
                 .filter(p -> p.title().toLowerCase().contains("wireless")
                         || p.tags().stream().anyMatch(t -> t.equalsIgnoreCase("wireless")))
                 .count();
         check(report, failures, "wireless >= 6", wireless >= 6, wireless);
 
-        long cheap = page.items().stream().filter(Product::active)
+        long cheap = fixtures.stream()
                 .filter(p -> p.price().compareTo(new BigDecimal("25")) < 0).count();
-        long mid = page.items().stream().filter(Product::active)
+        long mid = fixtures.stream()
                 .filter(p -> p.price().compareTo(new BigDecimal("25")) >= 0
                         && p.price().compareTo(new BigDecimal("100")) < 0).count();
-        long premium = page.items().stream().filter(Product::active)
+        long premium = fixtures.stream()
                 .filter(p -> p.price().compareTo(new BigDecimal("100")) >= 0).count();
         check(report, failures, "price bands >= 4", Math.min(cheap, Math.min(mid, premium)) >= 4,
                 Map.of("cheap", cheap, "mid", mid, "premium", premium));
+
+        // The generated expansion must itself satisfy the catalog shape rules.
+        long generated = products.list(null, null, Boolean.TRUE, 0, 1).total()
+                - (long) SeedPlan.NAMED_PRODUCTS.size() - SeedPlan.FILLERS.size();
+        check(report, failures, "generated products present",
+                generated == SeedPlan.GENERATED_COUNT, generated);
 
         long orders = jdbc.queryForObject("SELECT count(*) FROM orders", Long.class);
         check(report, failures, "40 orders", orders == 40, orders);
@@ -287,7 +365,7 @@ public class SeedService {
                         + "'Wireless Keyboard Mini','Bluetooth Speaker','Wireless Presenter'))",
                 Long.class);
         check(report, failures, "wendy wireless orders >= 3", wendy >= 3, wendy);
-        return finish(report, failures, expectedOrders, page.total());
+        return finish(report, failures, expectedOrders, all.total());
     }
 
     /** The catalog-shape and snapshot-preservation invariants, then the verdict. */
@@ -307,10 +385,10 @@ public class SeedService {
                         && mouse.attributes().containsKey("dpi"),
                 Map.of("tags", mouse.tags(), "attributes", mouse.attributes().keySet()));
 
-        boolean shapeOk = productsSeen > 0 && products.list(null, null, null, 0, 100).items().stream()
-                .allMatch(p -> !p.sku().isBlank() && !p.title().isBlank() && p.price() != null
-                        && !p.category().isBlank() && !p.attributes().isEmpty()
-                        && !p.variants().isEmpty());
+        // Shape check across the fixtures and a page of the generated expansion.
+        boolean shapeOk = productsSeen > 0
+                && products.list(null, null, null, 0, 25).items().stream().allMatch(SeedService::wellFormed)
+                && products.list("GEN-", null, Boolean.TRUE, 0, 100).items().stream().allMatch(SeedService::wellFormed);
         check(report, failures, "shape everywhere", shapeOk, shapeOk);
 
         long orders = jdbc.queryForObject("SELECT count(*) FROM orders", Long.class);
@@ -333,6 +411,16 @@ public class SeedService {
             throw new IllegalStateException("SEED VERIFY FAILED:\n- " + String.join("\n- ", failures));
         }
         return report;
+    }
+
+    /** The catalog shape every document — fixture or generated — must satisfy. */
+    private static boolean wellFormed(Product p) {
+        return p.sku() != null && !p.sku().isBlank()
+                && p.title() != null && !p.title().isBlank()
+                && p.price() != null && p.price().signum() >= 0
+                && p.category() != null && !p.category().isBlank()
+                && p.attributes() != null && !p.attributes().isEmpty()
+                && p.variants() != null && !p.variants().isEmpty();
     }
 
     private long countOrdersWithTitle(String title) {

@@ -127,6 +127,117 @@ public final class SeedPlan {
     public static final List<String> CATEGORIES =
             List.of("peripherals", "audio", "cables", "office");
 
+    // -- generated catalog expansion -----------------------------------------
+    //
+    // The storefront must stay usable with a catalog too large to render at
+    // once. The 25 hand-written seeds above stay exactly as they are — they are
+    // the fixtures orders, tests and the snapshot-mismatch check depend on.
+    // Below them sits a deterministic generated catalog that scales the storefront
+    // without touching any of that behaviour.
+
+    /** How many additional products the generated catalog contributes. */
+    public static final int GENERATED_COUNT = 3500;
+
+    /** Total catalog size: 6 named + 18 fillers + 1 inactive + generated. */
+    public static final int EXPECTED_PRODUCTS =
+            NAMED_PRODUCTS.size() + FILLERS.size() + 1 + GENERATED_COUNT;
+
+    /** Active subset of {@link #EXPECTED_PRODUCTS} (the inactive fixture is excluded). */
+    public static final int EXPECTED_ACTIVE = EXPECTED_PRODUCTS - 1;
+
+    /** Deterministic catalog size, kept out of the order-plan RNG stream. */
+    private static final long GENERATED_SALT = 0x5EEDCA7A10L;
+
+    /** Per-category vocabulary: adjectives, nouns and attribute keys. */
+    record Vocabulary(List<String> adjectives, List<String> nouns, List<String> keys) {
+    }
+
+    private static final Map<String, Vocabulary> GENERATED_VOCABULARY = Map.of(
+            "peripherals", new Vocabulary(
+                    List.of("Wireless", "Ergonomic", "Compact", "Ultra", "Pro", "Mini",
+                            "Gaming", "Travel", "Silent", "Adjustable", "Premium", "Smart"),
+                    List.of("Mouse", "Keyboard", "Webcam", "Trackpad", "Mouse Pad",
+                            "Laptop Stand", "KVM Switch", "Stylus", "Keypad", "Headset Stand"),
+                    List.of("dpi", "color", "layout", "polling_rate", "warranty_months")),
+            "audio", new Vocabulary(
+                    List.of("Wireless", "Noise Cancelling", "Studio", "Portable", "Compact",
+                            "Hi-Fi", "Gaming", "Smart", "Premium", "Mini", "Open-Back", "Digital"),
+                    List.of("Earbuds", "Headphones", "Speaker", "Microphone", "Soundbar",
+                            "Amplifier", "Audio Interface", "Turntable", "Headset", "DAC"),
+                    List.of("battery_hours", "impedance", "color", "watts", "channels")),
+            "cables", new Vocabulary(
+                    List.of("USB-C", "Braided", "Right-Angle", "Fast-Charging", "Extended",
+                            "Compact", "Travel", "Pro", "Dual", "Premium", "Angled", "Flexible"),
+                    List.of("Cable", "Hub", "Charger", "Adapter", "Splitter", "Extender",
+                            "Converter", "Docking Station", "Power Strip"),
+                    List.of("length_m", "watts", "ports", "color", "warranty_months")),
+            "office", new Vocabulary(
+                    List.of("Adjustable", "Ergonomic", "Compact", "LED", "Premium", "Smart",
+                            "Standing", "Minimal", "Deluxe", "Portable", "Rechargeable",
+                            "Executive"),
+                    List.of("Desk Lamp", "Notebook Set", "Desk Organizer", "Monitor Arm",
+                            "Document Tray", "Pen Set", "Foot Rest", "Whiteboard", "Chair Mat",
+                            "Tidy Bin"),
+                    List.of("color_temp", "power", "material", "trays", "count")));
+
+    /** Model suffixes, so generated titles vary the way a real catalog does. */
+    private static final List<String> SERIES =
+            List.of("Mk I", "Mk II", "Mk III", "Plus", "SE", "Pro", "Max", "Lite", "Prime", "Neo");
+
+    private static final List<String> COLORS =
+            List.of("black", "white", "silver", "graphite", "navy", "sage", "sand", "charcoal");
+
+    /**
+     * Build the generated catalog expansion. Deterministic: the same {@code seed}
+     * always yields the same products in the same order. The generator uses a
+     * salted RNG so adding products never perturbs the 40-order plan.
+     */
+    public static List<ProductSeed> generatedCatalog(long seed) {
+        Random rng = new Random(seed + GENERATED_SALT);
+        List<String> categories = List.copyOf(CATEGORIES);
+        List<ProductSeed> out = new ArrayList<>(GENERATED_COUNT);
+
+        for (int i = 0; i < GENERATED_COUNT; i++) {
+            String category = categories.get(rng.nextInt(categories.size()));
+            Vocabulary vocab = GENERATED_VOCABULARY.get(category);
+            String adjective = vocab.adjectives().get(rng.nextInt(vocab.adjectives().size()));
+            String noun = vocab.nouns().get(rng.nextInt(vocab.nouns().size()));
+            String series = SERIES.get(rng.nextInt(SERIES.size()));
+
+            // ~70% carry a series suffix, the rest are the plain product name.
+            String title = rng.nextInt(10) < 7
+                    ? adjective + " " + noun + " " + series
+                    : adjective + " " + noun;
+
+            // Price band per category, in cents, so generated prices span the
+            // same cheap/mid/premium bands the 25 hand-written seeds do.
+            int centsTotal = switch (category) {
+                case "audio" -> 4000 + rng.nextInt(16000);
+                case "peripherals" -> 1500 + rng.nextInt(9000);
+                case "office" -> 1200 + rng.nextInt(8000);
+                default -> 800 + rng.nextInt(4000);          // cables
+            };
+            String price = String.format("%.2f", centsTotal / 100.0);
+
+            String color = COLORS.get(rng.nextInt(COLORS.size()));
+            Map<String, Object> attributes = new LinkedHashMap<>();
+            attributes.put(vocab.keys().get(rng.nextInt(vocab.keys().size())), rng.nextInt(2000) + 1);
+            attributes.put("color", color);
+            if (rng.nextBoolean()) {
+                attributes.put("warranty_months", 12 + rng.nextInt(36));
+            }
+
+            List<String> tags = List.of(
+                    category,
+                    rng.nextBoolean() ? "wireless" : "usb",
+                    rng.nextBoolean() ? "office" : "home");
+
+            out.add(new ProductSeed(
+                    String.format("GEN-%05d", i), title, price, category, tags, attributes));
+        }
+        return out;
+    }
+
     /** The catalog title behind a plan's product index. */
     public static String titleFor(int index) {
         if (index < NAMED_PRODUCTS.size()) {

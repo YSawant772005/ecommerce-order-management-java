@@ -78,6 +78,20 @@ public final class ProductDtos {
         }
     }
 
+    /**
+     * One page of catalog results plus everything a client needs to page onward.
+     * {@code items} carries the existing product documents unchanged; only the
+     * envelope around them is new, so the product structure is untouched.
+     */
+    public record ProductPageResponse(
+            @JsonProperty("items") List<Product> items,
+            int page,
+            int size,
+            long totalItems,
+            int totalPages,
+            boolean hasNext) {
+    }
+
     /** Screen 5 edit. Every field optional; only non-null fields are written. */
     public record ProductUpdate(
             String sku,

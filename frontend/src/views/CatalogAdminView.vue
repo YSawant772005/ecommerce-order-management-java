@@ -1,11 +1,42 @@
 <template>
   <div class="page-head">
     <h2>Catalog <span class="muted">· MongoDB only</span></h2>
-    <span class="page-hint">🗄️ {{ items.length }} products in collection</span>
+    <span class="page-hint">🗄️ {{ catalog.items.length }} of {{ catalog.totalItems }} products</span>
   </div>
 
-  <div v-if="state === 'loading'" class="state-pill">LOADING</div>
-  <div v-else-if="state === 'error'" class="state-pill error">ERROR: {{ error }}</div>
+  <!-- Admin controls: server-side search + filters. Nothing is filtered in Vue. -->
+  <div class="card filter-card">
+    <div class="search-bar">
+      <span class="search-ico">🔍</span>
+      <input
+        v-model="searchText"
+        placeholder="Search by title, SKU or description…"
+        @input="onSearchInput" />
+      <button v-if="catalog.filtersActive" class="btn ghost sm" @click="clearFilters">Clear</button>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Category</span>
+      <UiDropdown
+        :model-value="catalog.category"
+        :options="filterCategoryOptions"
+        label=""
+        placeholder="All"
+        @change="(v) => catalog.setCategory(v)" />
+      <span class="filter-label">Status</span>
+      <UiDropdown
+        :model-value="catalog.status"
+        :options="statusOptions"
+        label=""
+        placeholder="All"
+        @change="(v) => catalog.setStatus(v)" />
+    </div>
+  </div>
+
+  <div v-if="catalog.state === 'loading'" class="state-pill">LOADING</div>
+  <div v-else-if="catalog.state === 'error'" class="state-pill error">ERROR: {{ catalog.error }}</div>
+  <div v-else-if="catalog.state === 'empty'" class="state-pill">
+    No products match the current filters.
+  </div>
   <div v-else>
     <div class="card table-card">
       <div class="table-head">
@@ -14,7 +45,7 @@
       </div>
       <table>
         <tr><th>SKU</th><th>Title</th><th>Price</th><th>Category</th><th>Active</th><th></th></tr>
-        <tr v-for="p in items" :key="p._id" :class="{ editing: form._id === p._id }">
+        <tr v-for="p in catalog.items" :key="p._id" :class="{ editing: form._id === p._id }">
           <td class="sku">{{ p.sku }}</td>
           <td class="p-name">{{ p.title }}</td>
           <td class="money">{{ formatMoney(p.price) }}</td>
@@ -23,6 +54,15 @@
           <td class="right"><button class="btn ghost sm" @click="edit(p)">Edit</button></td>
         </tr>
       </table>
+
+      <!-- Infinite scroll sentinel + minimal status line. -->
+      <div ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
+      <div v-if="catalog.loadingMore" class="scroll-note">Loading more products…</div>
+      <div v-else-if="catalog.loadMoreError" class="scroll-note error">
+        <span>Failed to load products. Retry</span>
+        <button class="btn ghost sm" @click="retry">Retry</button>
+      </div>
+      <div v-else-if="catalog.allLoaded" class="scroll-note">All products loaded.</div>
     </div>
   </div>
 
@@ -128,22 +168,93 @@
   </Teleport>
 </template>
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createProduct, listProducts, updateProduct } from '../api/products.js'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { createProduct, updateProduct } from '../api/products.js'
 import { formatMoney } from '../utils/money.js'
+import { useAdminCatalog } from '../stores/adminCatalog.js'
 import UiDropdown from '../components/UiDropdown.vue'
 
+const catalog = useAdminCatalog()
+const sentinel = ref(null)
+const searchText = ref('')
+
+/* Categories already present in the seed data — no invented taxonomy. */
 const catOptions = [
   { value: 'peripherals', label: 'Peripherals' },
   { value: 'audio', label: 'Audio' },
   { value: 'cables', label: 'Cables' },
   { value: 'office', label: 'Office' }
 ]
+const filterCategoryOptions = [{ value: '', label: 'All' }, ...catOptions]
+const statusOptions = [
+  { value: 'all', label: 'All' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' }
+]
 
-const items = ref([])
-const state = ref('idle')
-const error = ref('')
-const msg = ref('')
+const items = computed(() => catalog.items)
+
+/*
+ * Debounced search: typing "mouse" must not fire four requests. 350ms, then a
+ * single search that resets paging to page 0.
+ */
+let searchTimer = null
+function onSearchInput() {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(async () => {
+    await catalog.setSearch(searchText.value.trim())
+    await nextTick()
+    observe()
+  }, 350)
+}
+
+async function clearFilters() {
+  clearTimeout(searchTimer)
+  searchText.value = ''
+  await catalog.resetFilters()
+  await nextTick()
+  observe()
+}
+
+async function retry() {
+  await catalog.retryLoadMore()
+  await nextTick()
+  observe()
+}
+
+/*
+ * Infinite scroll via IntersectionObserver — no scroll listener. The store's
+ * `loadingMore` / `hasNext` guards stop overlapping requests.
+ */
+let observer = null
+function observe() {
+  teardown()
+  if (!sentinel.value) return
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) catalog.loadMore()
+    },
+    { rootMargin: '200px' }
+  )
+  observer.observe(sentinel.value)
+}
+function teardown() {
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
+}
+
+onMounted(async () => {
+  await catalog.load()
+  await nextTick()
+  observe()
+})
+onBeforeUnmount(() => {
+  clearTimeout(searchTimer)
+  teardown()
+})
+
 const formOpen = ref(false)
 const blank = { sku: '', title: '', price: '', category: '', active: true }
 const form = ref({ ...blank })
@@ -175,16 +286,7 @@ const saveHint = computed(() => {
   return ''
 })
 
-async function load() {
-  state.value = 'loading'
-  try {
-    items.value = await listProducts({ include_inactive: true, limit: 100 })
-    state.value = 'success'
-  } catch (e) {
-    state.value = 'error'
-    error.value = e.message
-  }
-}
+const msg = ref('')
 function focusTag() { tagInput.value?.focus() }
 function addTag() {
   const parts = tagDraft.value.split(',').map((t) => t.trim()).filter(Boolean)
@@ -252,7 +354,11 @@ async function save() {
     else await createProduct(payload)
     resetForm(false)
     formOpen.value = false
-    await load()
+    // Re-read page 0 so a new product appears at the top; an edit may move a row
+    // out of the current filter, which a refresh makes obvious.
+    await catalog.load()
+    await nextTick()
+    observe()
   } catch (e) {
     msg.value = 'ERROR: ' + e.message
   }
@@ -261,13 +367,33 @@ async function save() {
 /* Lock background scroll + Escape-to-close while the modal is open. */
 watch(formOpen, (open) => { document.body.style.overflow = open ? 'hidden' : '' })
 function onKey(e) { if (e.key === 'Escape' && formOpen.value) cancelEdit() }
-onMounted(() => { load(); window.addEventListener('keydown', onKey) })
+onMounted(() => { window.addEventListener('keydown', onKey) })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   document.body.style.overflow = ''
 })
 </script>
 <style>
+/* ---------- admin catalog controls ---------- */
+.filter-card { padding: 16px 18px; margin-bottom: 16px; }
+.search-bar { display: flex; align-items: center; gap: 10px; }
+.search-ico { font-size: 15px; opacity: .7; }
+.search-bar input {
+  flex: 1; min-width: 0; padding: 11px 16px; border-radius: 999px;
+  border: 1px solid var(--line); font: inherit; background: #f8fafc;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.search-bar input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+.filter-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.filter-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; }
+/* Zero-height marker the IntersectionObserver watches. */
+.scroll-sentinel { height: 1px; margin-top: 12px; }
+.scroll-note {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 14px 0 4px; font-size: 13px; color: var(--ink-soft);
+}
+.scroll-note.error { color: #b91c1c; }
+
 .page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .page-hint {
   font-size: 12px; color: var(--ink-soft); background: var(--card);

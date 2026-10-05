@@ -12,12 +12,25 @@
     <div v-if="catalog.state === 'loading'" class="state-pill">Loading products...</div>
     <div v-else-if="catalog.state === 'error'" class="state-pill error">{{ catalog.error }}</div>
     <div v-else-if="catalog.state === 'empty'" class="empty-state"><strong>No products found</strong><span>Try another search or category.</span></div>
-    <div v-else class="grid"><ProductCard v-for="p in catalog.items" :key="p._id || p.id" :product="p" @add="add" /></div>
+    <template v-else>
+      <div class="grid"><ProductCard v-for="p in catalog.items" :key="p._id || p.id" :product="p" @add="add" /></div>
+
+      <!-- Infinite scroll: the observer watches this sentinel, not the scroll event. -->
+      <div ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
+
+      <div v-if="catalog.loadingMore" class="scroll-note">Loading more products…</div>
+      <div v-else-if="catalog.loadMoreError" class="scroll-note error">
+        <span>Failed to load more products. Retry</span>
+        <button class="btn ghost sm" @click="retry">Retry</button>
+      </div>
+      <div v-else-if="catalog.allLoaded" class="scroll-note">All products loaded.</div>
+      <p class="result-count muted">{{ catalog.items.length }} of {{ catalog.totalItems }} products</p>
+    </template>
   </section>
   <section class="features"><div class="feature"><span class="f-ico">01</span><div><strong>Easy checkout</strong><p>Clear prices, simple ordering.</p></div></div><div class="feature"><span class="f-ico">02</span><div><strong>Fast dispatch</strong><p>Most orders leave within 24 hours.</p></div></div><div class="feature"><span class="f-ico">03</span><div><strong>Made to last</strong><p>Useful products, chosen carefully.</p></div></div></section>
 </template>
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useCatalog } from '../stores/catalog.js'
 import { useCart } from '../stores/cart.js'
 import { flyToCart, burst, toast } from '../fx/fx.js'
@@ -27,6 +40,7 @@ const catalog = useCatalog()
 const cart = useCart()
 const category = ref('')
 const query = ref('')
+const sentinel = ref(null)
 const categories = [
   { value: '', label: 'All products', icon: 'All' },
   { value: 'audio', label: 'Audio', icon: 'Sound' },
@@ -35,8 +49,46 @@ const categories = [
   { value: 'cables', label: 'Cables', icon: 'Power' }
 ]
 const activeLabel = computed(() => categories.find((item) => item.value === category.value)?.label || 'All products')
-async function reload() { await catalog.load({ category: category.value, search: query.value || undefined }) }
+
+/* The current filter set, reused by loadMore/retry so a retry asks for the same page. */
+function filterParams() {
+  return { category: category.value, search: query.value || undefined }
+}
+async function reload() {
+  await catalog.load(filterParams())
+  await nextTick()
+  observe()
+}
 onMounted(reload)
+
+/*
+ * Infinite scroll via IntersectionObserver — no scroll listener. The store's
+ * own `loadingMore` / `hasNext` guards stop overlapping requests, so a sentinel
+ * that stays visible while a page is in flight cannot fire a second call.
+ */
+let observer = null
+function observe() {
+  teardown()
+  if (!sentinel.value) return
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) catalog.loadMore(filterParams())
+    },
+    { rootMargin: '200px' }
+  )
+  observer.observe(sentinel.value)
+}
+function teardown() {
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
+}
+onBeforeUnmount(teardown)
+
+function retry() {
+  catalog.retryLoadMore(filterParams()).then(observe)
+}
 function chooseCategory(value) { category.value = value; reload() }
 async function add(product, event) {
   cart.add(product._id || product.id, 1, product.title, product.category)
@@ -61,6 +113,16 @@ async function add(product, event) {
 .products-section .section-head { margin: 12px 0 18px; align-items: end; }
 .products-section .section-head h2 { margin: 0; }
 .result-count { color: var(--ink-soft); font-size: 13px; }
+
+/* ---------- infinite scroll ---------- */
+/* Zero-height marker the IntersectionObserver watches. */
+.scroll-sentinel { height: 1px; margin-top: 18px; }
+.scroll-note {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin: 18px 0 6px; font-size: 13px; color: var(--ink-soft);
+}
+.scroll-note.error { color: #b91c1c; }
+.scroll-footer { text-align: center; }
 .product-search { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 16px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .product-search span { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .product-search input { flex: 1; min-width: 0; border: 0; padding: 10px; background: transparent; font: inherit; color: var(--ink); }

@@ -75,10 +75,16 @@
         </tr>
       </table>
       <div class="pager">
-        <button class="btn ghost sm" :disabled="search.page <= 1" @click="search.page--; search.run()">← Prev</button>
-        <span class="pager-page">Page {{ search.page }} / {{ pages }}</span>
-        <button class="btn ghost sm" :disabled="search.page >= pages" @click="search.page++; search.run()">Next →</button>
+        <button class="btn ghost sm" :disabled="search.page <= 1" @click="goToPage(search.page - 1)">← Prev</button>
+        <button
+          v-for="(p, i) in pageNumbers" :key="i"
+          class="btn ghost sm page-num"
+          :class="{ current: p === search.page, gap: p === '…' }"
+          :disabled="p === '…'"
+          @click="goToPage(p)">{{ p }}</button>
+        <button class="btn ghost sm" :disabled="search.page >= pages" @click="goToPage(search.page + 1)">Next →</button>
       </div>
+      <div class="pager-page">Showing page {{ search.page }} of {{ pages }} · {{ search.result.total }} results</div>
     </div>
   </div>
 </template>
@@ -97,9 +103,36 @@ const statusOptions = [
 const statusLabel = computed(() =>
   search.statuses.length ? `Status (${search.statuses.length})` : 'All statuses'
 )
+/* Traditional page navigation. Order search is an inspection tool, so the admin
+   jumps between result pages rather than scrolling — deliberately NOT the
+   infinite scroll used by the catalog and storefront. */
 const pages = computed(() =>
   Math.max(1, Math.ceil((search.result?.total || 0) / search.size))
 )
+/* Windowed page list: first, last, and a short run around the current page. */
+const pageNumbers = computed(() => {
+  const last = pages.value
+  const current = search.page
+  const span = 2
+  const set = new Set([1, last])
+  for (let p = current - span; p <= current + span; p++) {
+    if (p >= 1 && p <= last) set.add(p)
+  }
+  const sorted = [...set].sort((a, b) => a - b)
+  const out = []
+  let prev = 0
+  for (const p of sorted) {
+    if (prev && p - prev > 1) out.push('…')
+    out.push(p)
+    prev = p
+  }
+  return out
+})
+function goToPage(p) {
+  if (p === '…' || p === search.page || p < 1 || p > pages.value) return
+  search.page = p
+  search.run()          // run() without reset keeps the chosen page
+}
 function initials(name = '') {
   const parts = String(name).trim().split(/\s+/).slice(0, 2)
   return parts.map((p) => p[0]?.toUpperCase() || '').join('') || '?'
@@ -166,7 +199,11 @@ onMounted(() => search.run(true))
   display: flex; align-items: center; justify-content: center; gap: 14px;
   padding: 14px; border-top: 1px solid var(--line); background: #f8fafc;
 }
-.pager-page { font-size: 13px; color: var(--ink-soft); font-weight: 650; }
+.pager-page { font-size: 13px; color: var(--ink-soft); font-weight: 650; text-align: center; padding: 0 0 12px; background: #f8fafc; }
+.pager { flex-wrap: wrap; }
+.pager .page-num { min-width: 38px; justify-content: center; padding: 7px 10px; }
+.pager .page-num.current { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.pager .page-num.gap { border: 0; background: transparent; color: var(--ink-soft); min-width: 20px; padding: 7px 4px; }
 
 .msdrop { position: relative; }
 .msdrop-btn {

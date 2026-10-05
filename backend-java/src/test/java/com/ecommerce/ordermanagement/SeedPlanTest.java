@@ -51,6 +51,66 @@ class SeedPlanTest {
         assertThat(SeedPlan.USERS).hasSize(8);
     }
 
+    // -- generated catalog expansion -----------------------------------------
+
+    @Test
+    void the_generated_catalog_is_deterministic() {
+        assertThat(SeedPlan.generatedCatalog(42)).isEqualTo(SeedPlan.generatedCatalog(42));
+    }
+
+    @Test
+    void the_generated_catalog_is_large_enough_to_require_paging() {
+        assertThat(SeedPlan.GENERATED_COUNT).isBetween(3000, 4000);
+        assertThat(SeedPlan.EXPECTED_PRODUCTS).isBetween(3000, 4000);
+        assertThat(SeedPlan.generatedCatalog(42)).hasSize(SeedPlan.GENERATED_COUNT);
+    }
+
+    @Test
+    void generated_products_keep_the_fixture_schema_and_unique_skus() {
+        List<SeedPlan.ProductSeed> generated = SeedPlan.generatedCatalog(42);
+        assertThat(generated).allSatisfy(p -> {
+            assertThat(p.sku()).startsWith("GEN-");
+            assertThat(p.title()).isNotBlank();
+            assertThat(p.price()).matches("\\d+\\.\\d{2}");
+            assertThat(p.category()).isIn(SeedPlan.CATEGORIES);
+            assertThat(p.tags()).isNotEmpty();
+            assertThat(p.attributes()).isNotEmpty();
+        });
+        assertThat(generated.stream().map(SeedPlan.ProductSeed::sku).distinct().count())
+                .isEqualTo((long) SeedPlan.GENERATED_COUNT);
+    }
+
+    @Test
+    void generated_skus_never_collide_with_the_hand_written_fixtures() {
+        List<String> fixtureSkus = java.util.stream.Stream
+                .concat(SeedPlan.NAMED_PRODUCTS.stream(), SeedPlan.FILLERS.stream())
+                .map(SeedPlan.ProductSeed::sku)
+                .collect(Collectors.toList());
+        fixtureSkus.add(SeedPlan.INACTIVE_PRODUCT.sku());
+
+        assertThat(SeedPlan.generatedCatalog(42).stream().map(SeedPlan.ProductSeed::sku))
+                .doesNotContainAnyElementsOf(fixtureSkus);
+    }
+
+    @Test
+    void the_expansion_does_not_disturb_the_forty_order_plan() {
+        // The generated catalog uses a salted RNG precisely so this holds.
+        assertThat(SeedPlan.buildOrderPlan(42, ANCHOR))
+                .isEqualTo(SeedPlan.buildOrderPlan(42, ANCHOR));
+        assertThat(SeedPlan.buildOrderPlan(42, ANCHOR)).hasSize(40);
+    }
+
+    @Test
+    void generated_products_are_varied_not_duplicates() {
+        List<SeedPlan.ProductSeed> generated = SeedPlan.generatedCatalog(42);
+        assertThat(generated.stream().map(SeedPlan.ProductSeed::title).distinct().count())
+                .as("titles should not all be identical")
+                .isGreaterThan((long) SeedPlan.GENERATED_COUNT / 4);
+        assertThat(generated.stream().map(SeedPlan.ProductSeed::price).distinct().count())
+                .as("prices should not all be identical")
+                .isGreaterThan((long) SeedPlan.GENERATED_COUNT / 4);
+    }
+
     @Test
     void every_status_and_price_band_has_enough_catalogue() {
         assertThat(SeedPlan.CATEGORIES).containsExactly("peripherals", "audio", "cables", "office");

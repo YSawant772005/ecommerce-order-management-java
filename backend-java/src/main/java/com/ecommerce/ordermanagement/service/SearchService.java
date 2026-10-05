@@ -178,7 +178,11 @@ public class SearchService {
             facets.put(bucket.path("key").asText(), bucket.path("doc_count").asLong());
         }
 
-        return new SearchResponse(total, req.page(), req.size(), money(revenue), facets, hits);
+        int totalPages = (int) Math.ceil((double) total / req.size());
+        boolean hasNext = (long) req.page() * req.size() < total;
+        return new SearchResponse(
+                total, req.page(), req.size(), totalPages, hasNext,
+                money(revenue), facets, hits);
     }
 
     private static OffsetDateTime parseDate(String value) {

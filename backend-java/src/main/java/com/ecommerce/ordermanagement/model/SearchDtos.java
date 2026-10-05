@@ -59,11 +59,20 @@ public final class SearchDtos {
             List<OrderDtos.OrderItemOut> items) {
     }
 
-    /** Hits plus aggregations computed over the whole filtered set. */
+    /**
+     * Hits plus aggregations computed over the whole filtered set.
+     *
+     * <p>{@code totalPages} and {@code hasNext} are added so the admin screen can
+     * render a numbered pager. Both are additive: the existing
+     * {@code total}/{@code page}/{@code size}/{@code hits} contract is unchanged,
+     * and the aggregates still describe the entire filtered set, not the page.</p>
+     */
     public record SearchResponse(
             long total,
             int page,
             int size,
+            int totalPages,
+            boolean hasNext,
             @JsonSerialize(using = MoneyCodec.MoneySerializer.class)
             @JsonDeserialize(using = MoneyCodec.MoneyDeserializer.class) BigDecimal revenue,
             Map<String, Long> status_facets,

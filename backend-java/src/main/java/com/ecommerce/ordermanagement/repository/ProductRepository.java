@@ -46,8 +46,20 @@ public class ProductRepository {
         }
     }
 
+    /**
+     * One page of catalog results, plus the unpaginated total that matched.
+     * {@code total} is a real {@code countDocuments} for the filter, so the
+     * caller never has to load the catalog to know how many pages exist.
+     */
     public record ProductPage(List<Product> items, long total) {
+
+        public boolean hasNext(long skip, int limit) {
+            return skip + items.size() < total;
+        }
     }
+
+    /** Largest page a caller may request; keeps a single query bounded. */
+    public static final int MAX_PAGE_SIZE = 100;
 
     private final MongoTemplate mongo;
 
@@ -226,7 +238,12 @@ public class ProductRepository {
         }
         Criteria criteria = parts.isEmpty() ? new Criteria() : new Criteria().andOperator(parts);
         long total = mongo.count(new Query(criteria), COLLECTION);
-        Query find = new Query(criteria).with(Sort.by(Sort.Direction.ASC, "title")).skip(skip).limit(limit);
+        // Sort by title for a human-sensible grid, with _id as the tie-breaker so
+        // the order is total: no product can land on two different pages, or on
+        // neither, as the catalog grows.
+        Query find = new Query(criteria)
+                .with(Sort.by(Sort.Direction.ASC, "title").and(Sort.by(Sort.Direction.ASC, "_id")))
+                .skip(skip).limit(limit);
         List<Product> items = mongo.find(find, Document.class, COLLECTION).stream()
                 .map(ProductRepository::toProduct)
                 .toList();
@@ -273,6 +290,25 @@ public class ProductRepository {
             throw new DuplicateSku("sku already exists: " + create.sku());
         }
         return toProduct(doc);
+    }
+
+    /**
+     * Bulk-insert products. Used only by the seeder's generated catalog expansion:
+     * one {@code insertMany} per chunk instead of thousands of round trips.
+     * Document shape and Decimal128 handling are identical to {@link #create}.
+     */
+    public void createAll(List<ProductCreate> creates) {
+        for (int start = 0; start < creates.size(); start += 500) {
+            List<Document> docs = new ArrayList<>(
+                    creates.subList(start, Math.min(start + 500, creates.size())).stream()
+                            .map(c -> {
+                                Document doc = toDocument(c);
+                                doc.put("updated_at", new Date());
+                                return doc;
+                            })
+                            .toList());
+            mongo.insert(docs, COLLECTION);
+        }
     }
 
     public Product update(String productId, ProductUpdate update) {

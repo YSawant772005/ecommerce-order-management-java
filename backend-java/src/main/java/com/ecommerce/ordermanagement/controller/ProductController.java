@@ -2,6 +2,7 @@ package com.ecommerce.ordermanagement.controller;
 
 import com.ecommerce.ordermanagement.model.ProductDtos.Product;
 import com.ecommerce.ordermanagement.model.ProductDtos.ProductCreate;
+import com.ecommerce.ordermanagement.model.ProductDtos.ProductPageResponse;
 import com.ecommerce.ordermanagement.model.ProductDtos.ProductUpdate;
 import com.ecommerce.ordermanagement.repository.ProductRepository;
 import com.ecommerce.ordermanagement.web.ApiException;
@@ -28,21 +29,57 @@ import java.util.List;
 @Validated
 public class ProductController {
 
+    /** Page size used when the caller supplies none. */
+    private static final int DEFAULT_PAGE_SIZE = 24;
+
     private final ProductRepository products;
 
     public ProductController(ProductRepository products) {
         this.products = products;
     }
 
+    /**
+     * One page of the catalog.
+     *
+     * <p>Pagination happens in MongoDB ({@code skip}/{@code limit}); the JVM only
+     * ever holds the requested page. The existing filters ({@code category},
+     * {@code search}, {@code include_inactive}) are unchanged and compose with
+     * paging. The legacy {@code skip}/{@code limit} parameters still work and are
+     * honoured when {@code page}/{@code size} are absent.</p>
+     */
     @GetMapping
-    public List<Product> listProducts(
+    public ProductPageResponse listProducts(
             @RequestParam(required = false) String category,
+            @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "false") boolean include_inactive,
             @RequestParam(required = false) String search,
-            @RequestParam(defaultValue = "0") @Min(0) int skip,
-            @RequestParam(defaultValue = "50") @Min(1) @Max(100) int limit) {
-        Boolean active = include_inactive ? null : Boolean.TRUE;
-        return products.list(search, category, active, skip, limit).items();
+            @RequestParam(required = false) @Min(0) Integer page,
+            @RequestParam(required = false) @Min(1) @Max(ProductRepository.MAX_PAGE_SIZE) Integer size,
+            @RequestParam(required = false) @Min(0) Integer skip,
+            @RequestParam(required = false) @Min(1) @Max(ProductRepository.MAX_PAGE_SIZE) Integer limit) {
+        Boolean active = resolveActive(status, include_inactive);
+
+        int effectiveSize = size != null ? size
+                : limit != null ? limit
+                : DEFAULT_PAGE_SIZE;
+        // Guard the page*size product against overflowing int at absurd page numbers.
+        long skipLong = page != null ? (long) page * effectiveSize
+                : skip != null ? skip
+                : 0L;
+        int effectiveSkip = (int) Math.min(skipLong, Integer.MAX_VALUE);
+
+        ProductRepository.ProductPage result =
+                products.list(search, category, active, effectiveSkip, effectiveSize);
+
+        int effectivePage = page != null ? page : (int) (effectiveSkip / effectiveSize);
+        int totalPages = (int) Math.ceil((double) result.total() / effectiveSize);
+        return new ProductPageResponse(
+                result.items(),
+                effectivePage,
+                effectiveSize,
+                result.total(),
+                totalPages,
+                result.hasNext(effectiveSkip, effectiveSize));
     }
 
     @GetMapping("/{productId}")
@@ -78,6 +115,32 @@ public class ProductController {
         } catch (ProductRepository.DuplicateSku exc) {
             throw ApiException.conflict(exc.getMessage());
         }
+    }
+
+    /**
+     * Map the admin Status filter onto the {@code active} column.
+     *
+     * <p>{@code status} is the explicit admin control and wins outright:
+     * {@code all} means no active filter at all, {@code active}/{@code inactive}
+     * pin the flag. Only when {@code status} is absent does the older
+     * {@code include_inactive} flag apply, which keeps every pre-existing caller
+     * — the storefront and any direct API consumer — behaving exactly as before:
+     * active products only, unless {@code include_inactive=true}.</p>
+     */
+    private static Boolean resolveActive(String status, boolean includeInactive) {
+        if (status != null && !status.isBlank()) {
+            if (status.equalsIgnoreCase("all")) {
+                return null;
+            }
+            if (status.equalsIgnoreCase("active")) {
+                return Boolean.TRUE;
+            }
+            if (status.equalsIgnoreCase("inactive")) {
+                return Boolean.FALSE;
+            }
+            throw ApiException.unprocessable("status must be one of: all, active, inactive");
+        }
+        return includeInactive ? null : Boolean.TRUE;
     }
 
     /**
