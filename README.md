@@ -9,18 +9,76 @@ The system demonstrates a polyglot persistence architecture: **PostgreSQL** as t
 ## Architecture
 
 ```
- ┌─────────────────────┐
-                │   Vue 3 Frontend   │
-                │  (storefront+admin) │
-                └──────────┬──────────┘
-                           │ /api (proxied)
- ┌──────────▼──────────┐
-                │  Spring Boot :8000  │
-                └──────────┬──────────┘
-         ┌─────────┬───────┼────────┬──────────┐
-         ▼         ▼       ▼        ▼          ▼
-   PostgreSQL  MongoDB  Elastic RabbitMQ   Redis-free
-   (orders,   (catalog)  search   (async stateless users, index)    queue)     sessions outbox)
+ ## System Architecture
+
+```text
+                         ┌──────────────────────────┐
+                         │      Vue 3 Frontend      │
+                         │    Storefront + Admin     │
+                         └────────────┬─────────────┘
+                                      │
+                                      │ HTTP / REST
+                                      │ /api
+                                      ▼
+                         ┌──────────────────────────┐
+                         │    Nginx / Web Server    │
+                         │   Frontend + API Proxy   │
+                         └────────────┬─────────────┘
+                                      │
+                                      │ /api
+                                      ▼
+                         ┌──────────────────────────┐
+                         │   Spring Boot Backend    │
+                         │        Java 17            │
+                         │        Port 8000          │
+                         └────────────┬─────────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+                    │                 │                 │
+                    ▼                 ▼                 ▼
+          ┌────────────────┐ ┌────────────────┐ ┌────────────────────┐
+          │  PostgreSQL    │ │    MongoDB     │ │   Elasticsearch    │
+          │                │ │                │ │                    │
+          │ • Users        │ │ • Products     │ │ • Order Search     │
+          │ • Orders       │ │ • Variants     │ │ • Filters          │
+          │ • Order Items  │ │ • Attributes   │ │ • Aggregations     │
+          │ • Status       │ │ • Tags         │ │ • Search Projection│
+          │ • Money        │ │ • Catalog      │ │                    │
+          │ • Versions     │ │                │ │                    │
+          │ • Outbox       │ │                │ │                    │
+          └───────┬────────┘ └────────────────┘ └────────────────────┘
+                  │
+                  │ Transaction Commit
+                  │
+                  ▼
+          ┌────────────────┐
+          │  Outbox Event  │
+          │  PostgreSQL    │
+          └───────┬────────┘
+                  │
+                  │ Async Event
+                  ▼
+          ┌────────────────┐
+          │    RabbitMQ    │
+          │ Message Broker │
+          └───────┬────────┘
+                  │
+                  │ Message
+                  ▼
+          ┌────────────────────────┐
+          │  Spring AMQP Listener  │
+          │                        │
+          │ Builds Elasticsearch   │
+          │ Order Projection       │
+          └────────────┬───────────┘
+                       │
+                       │ Index / Update
+                       ▼
+              ┌────────────────────┐
+              │   Elasticsearch   │
+              │  Order Projection │
+              └────────────────────┘
 ```
 
 **Store responsibilities are deliberately separated:**
