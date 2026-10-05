@@ -8,20 +8,31 @@
   </section>
   <section id="grid" class="products-section">
     <div class="section-head"><div><p class="eyebrow">CURATED COLLECTION</p><h2>{{ activeLabel }}</h2></div><span class="result-count">{{ catalog.items.length }} products</span></div>
-    <form class="product-search" @submit.prevent="reload"><span>Search</span><input v-model="query" placeholder="Search products, categories or features" /><button class="btn" type="submit">Find</button></form>
+    <form class="product-search" @submit.prevent="reload"><span>Search</span><input v-model="query" placeholder="Search products, categories or features" /><button class="btn" type="submit">Find</button>
+      <label class="check-toggle" title="When off, products load only via the Load more button.">
+        <input type="checkbox" v-model="catalog.infiniteScroll" @change="onToggleInfinite" />
+        <span>Infinite scroll</span>
+      </label>
+    </form>
     <div v-if="catalog.state === 'loading'" class="state-pill">Loading products...</div>
     <div v-else-if="catalog.state === 'error'" class="state-pill error">{{ catalog.error }}</div>
     <div v-else-if="catalog.state === 'empty'" class="empty-state"><strong>No products found</strong><span>Try another search or category.</span></div>
     <template v-else>
       <div class="grid"><ProductCard v-for="p in catalog.items" :key="p._id || p.id" :product="p" @add="add" /></div>
 
-      <!-- Infinite scroll: the observer watches this sentinel, not the scroll event. -->
-      <div ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
+      <!-- Infinite scroll: the observer watches this sentinel, not the scroll event.
+           The sentinel only exists while the checkbox is on. -->
+      <div v-if="catalog.infiniteScroll" ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
 
       <div v-if="catalog.loadingMore" class="scroll-note">Loading more products…</div>
       <div v-else-if="catalog.loadMoreError" class="scroll-note error">
         <span>Failed to load more products. Retry</span>
         <button class="btn ghost sm" @click="retry">Retry</button>
+      </div>
+      <div v-else-if="!catalog.infiniteScroll && catalog.totalPages > 1" class="scroll-note pager">
+        <button class="btn ghost sm" :disabled="catalog.loadingMore || catalog.page <= 0" @click="prevPage">← Prev</button>
+        <span class="page-of">Page {{ catalog.page + 1 }} of {{ catalog.totalPages }}</span>
+        <button class="btn ghost sm" :disabled="catalog.loadingMore || !catalog.hasNext" @click="nextPage">Next →</button>
       </div>
       <div v-else-if="catalog.allLoaded" class="scroll-note">All products loaded.</div>
       <p class="result-count muted">{{ catalog.items.length }} of {{ catalog.totalItems }} products</p>
@@ -69,7 +80,9 @@ onMounted(reload)
 let observer = null
 function observe() {
   teardown()
-  if (!sentinel.value) return
+  // The checkbox is what disarms infinite scroll: with it off, scrolling to the
+  // bottom of the grid must never fetch a page.
+  if (!catalog.infiniteScroll || !sentinel.value) return
   observer = new IntersectionObserver(
     (entries) => {
       if (entries.some((e) => e.isIntersecting)) catalog.loadMore(filterParams())
@@ -87,7 +100,29 @@ function teardown() {
 onBeforeUnmount(teardown)
 
 function retry() {
-  catalog.retryLoadMore(filterParams()).then(observe)
+  catalog.retryLoadMore().then(observe)
+}
+
+/* Checkbox: on = scroll to load, off = the "Load more products" button. */
+async function onToggleInfinite() {
+  if (catalog.infiniteScroll) {
+    await nextTick()
+    observe()
+  } else {
+    teardown()   // stop observing so scrolling never loads a page
+  }
+}
+
+/* Pager navigation, used when infinite scroll is off. Pages REPLACE the grid. */
+async function nextPage() {
+  await catalog.nextPage()
+  await nextTick()
+  observe()
+}
+async function prevPage() {
+  await catalog.prevPage()
+  await nextTick()
+  observe()
 }
 function chooseCategory(value) { category.value = value; reload() }
 async function add(product, event) {
@@ -122,6 +157,17 @@ async function add(product, event) {
   margin: 18px 0 6px; font-size: 13px; color: var(--ink-soft);
 }
 .scroll-note.error { color: #b91c1c; }
+/* Classic pager shown when the infinite-scroll checkbox is off. */
+.scroll-note.pager { gap: 16px; }
+.page-of { font-size: 13px; font-weight: 650; color: var(--ink-soft); }
+/* Checkbox that switches infinite scroll on/off, matching the admin catalog. */
+.check-toggle {
+  display: inline-flex; align-items: center; gap: 7px; margin-left: auto;
+  font-size: 12px; font-weight: 650; color: var(--ink-soft); cursor: pointer;
+  user-select: none; white-space: nowrap;
+}
+.check-toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.check-toggle:hover { color: var(--accent); }
 .scroll-footer { text-align: center; }
 .product-search { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 16px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .product-search span { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }

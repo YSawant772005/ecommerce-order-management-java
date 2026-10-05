@@ -29,6 +29,10 @@
         label=""
         placeholder="All"
         @change="(v) => catalog.setStatus(v)" />
+      <label class="check-toggle" title="When off, pages load only via the Load more button.">
+        <input type="checkbox" v-model="catalog.infiniteScroll" @change="onToggleInfinite" />
+        <span>Infinite scroll</span>
+      </label>
     </div>
   </div>
 
@@ -55,12 +59,19 @@
         </tr>
       </table>
 
-      <!-- Infinite scroll sentinel + minimal status line. -->
-      <div ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
+      <!-- Infinite scroll sentinel + minimal status line. The sentinel only
+           exists while the checkbox is on; the button is its manual stand-in. -->
+      <div v-if="catalog.infiniteScroll" ref="sentinel" class="scroll-sentinel" aria-hidden="true"></div>
+
       <div v-if="catalog.loadingMore" class="scroll-note">Loading more products…</div>
       <div v-else-if="catalog.loadMoreError" class="scroll-note error">
         <span>Failed to load products. Retry</span>
         <button class="btn ghost sm" @click="retry">Retry</button>
+      </div>
+      <div v-else-if="!catalog.infiniteScroll && catalog.totalPages > 1" class="scroll-note pager">
+        <button class="btn ghost sm" :disabled="catalog.loadingMore || catalog.page <= 0" @click="prevPage">← Prev</button>
+        <span class="page-of">Page {{ catalog.page + 1 }} of {{ catalog.totalPages }}</span>
+        <button class="btn ghost sm" :disabled="catalog.loadingMore || !catalog.hasNext" @click="nextPage">Next →</button>
       </div>
       <div v-else-if="catalog.allLoaded" class="scroll-note">All products loaded.</div>
     </div>
@@ -222,14 +233,37 @@ async function retry() {
   observe()
 }
 
+/* Checkbox: on = scroll to load, off = the "Load more products" button. */
+async function onToggleInfinite() {
+  if (catalog.infiniteScroll) {
+    await nextTick()
+    observe()
+  } else {
+    teardown()   // stop observing so scrolling never loads a page
+  }
+}
+
+/* Pager navigation, used when infinite scroll is off. Pages REPLACE the table. */
+async function nextPage() {
+  await catalog.nextPage()
+  await nextTick()
+  observe()
+}
+async function prevPage() {
+  await catalog.prevPage()
+  await nextTick()
+  observe()
+}
+
 /*
  * Infinite scroll via IntersectionObserver — no scroll listener. The store's
- * `loadingMore` / `hasNext` guards stop overlapping requests.
+ * `loadingMore` / `hasNext` guards stop overlapping requests. The early return is
+ * what makes the checkbox work: with it off there is nothing to observe.
  */
 let observer = null
 function observe() {
   teardown()
-  if (!sentinel.value) return
+  if (!catalog.infiniteScroll || !sentinel.value) return
   observer = new IntersectionObserver(
     (entries) => {
       if (entries.some((e) => e.isIntersecting)) catalog.loadMore()
@@ -386,6 +420,13 @@ onBeforeUnmount(() => {
 .search-bar input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
 .filter-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
 .filter-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; }
+.check-toggle {
+  display: inline-flex; align-items: center; gap: 7px; margin-left: auto;
+  font-size: 12px; font-weight: 650; color: var(--ink-soft); cursor: pointer;
+  user-select: none;
+}
+.check-toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.check-toggle:hover { color: var(--accent); }
 /* Zero-height marker the IntersectionObserver watches. */
 .scroll-sentinel { height: 1px; margin-top: 12px; }
 .scroll-note {
@@ -393,6 +434,9 @@ onBeforeUnmount(() => {
   padding: 14px 0 4px; font-size: 13px; color: var(--ink-soft);
 }
 .scroll-note.error { color: #b91c1c; }
+/* Classic pager shown when the infinite-scroll checkbox is off. */
+.scroll-note.pager { gap: 16px; }
+.page-of { font-size: 13px; font-weight: 650; color: var(--ink-soft); }
 
 .page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .page-hint {

@@ -13,8 +13,10 @@ export const useCatalog = defineStore('catalog', {
     page: 0,
     hasNext: false,
     totalItems: 0,
+    totalPages: 0,      // page count, for the pager when infinite scroll is off
     loadingMore: false, // a follow-up page is in flight
-    loadMoreError: ''  // set when a follow-up page failed; retryable
+    loadMoreError: '',   // set when a follow-up page failed; retryable
+    infiniteScroll: true // checkbox: auto-load on scroll, or classic pagination
   }),
   getters: {
     allLoaded: (state) => state.state === 'success' && !state.hasNext
@@ -43,6 +45,7 @@ export const useCatalog = defineStore('catalog', {
         this.page = res.page
         this.hasNext = res.hasNext
         this.totalItems = res.totalItems
+        this.totalPages = res.totalPages
         this.state = res.items.length ? 'success' : 'empty'
       } catch (e) {
         this.state = 'error'
@@ -64,6 +67,7 @@ export const useCatalog = defineStore('catalog', {
         this.page = res.page
         this.hasNext = res.hasNext
         this.totalItems = res.totalItems
+        this.totalPages = res.totalPages
       } catch (e) {
         // Already-loaded products stay on screen; only the retry affordance appears.
         this.loadMoreError = e.message || 'Failed to load more products.'
@@ -76,6 +80,33 @@ export const useCatalog = defineStore('catalog', {
     async retryLoadMore() {
       this.loadMoreError = ''
       await this.loadMore()
-    }
+    },
+
+    /**
+     * Jump to a specific page, REPLACING the list. This is the pager path used
+     * when infinite scroll is off: unlike `loadMore`, it must not append, or the
+     * grid would grow by every page the shopper paged past.
+     */
+    async goToPage(page) {
+      if (this.loadingMore || this.state !== 'success') return
+      const last = Math.max(0, this.totalPages - 1)
+      if (page < 0 || page > last || page === this.page) return
+      this.loadingMore = true
+      this.loadMoreError = ''
+      try {
+        const res = await listProductsPage({ ...this.params(), page })
+        this.items = res.items
+        this.page = res.page
+        this.hasNext = res.hasNext
+        this.totalItems = res.totalItems
+      } catch (e) {
+        // The products already on screen stay put; only the retry note appears.
+        this.loadMoreError = e.message || 'Failed to load more products.'
+      } finally {
+        this.loadingMore = false
+      }
+    },
+    nextPage() { return this.goToPage(this.page + 1) },
+    prevPage() { return this.goToPage(this.page - 1) }
   }
 })

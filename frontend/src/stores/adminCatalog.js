@@ -24,7 +24,8 @@ export const useAdminCatalog = defineStore('adminCatalog', {
     totalPages: 0,
     hasNext: false,
     loadingMore: false,
-    loadMoreError: ''     // set when a follow-up page failed; retryable
+    loadMoreError: '',    // set when a follow-up page failed; retryable
+    infiniteScroll: true  // checkbox: auto-load on scroll, or manual "Load more"
   }),
   getters: {
     allLoaded: (state) => state.state === 'success' && !state.hasNext,
@@ -94,6 +95,34 @@ export const useAdminCatalog = defineStore('adminCatalog', {
       this.loadMoreError = ''
       await this.loadMore()
     },
+
+    /**
+     * Jump to a specific page, REPLACING the list. This is the pager path used
+     * when infinite scroll is off: unlike `loadMore`, it must not append, or the
+     * table would grow by every page the admin paged past.
+     */
+    async goToPage(page) {
+      if (this.loadingMore || this.state !== 'success') return
+      const last = Math.max(0, this.totalPages - 1)
+      if (page < 0 || page > last || page === this.page) return
+      this.loadingMore = true
+      this.loadMoreError = ''
+      try {
+        const res = await listProductsPage({ ...this.params(), page })
+        this.items = res.items
+        this.page = res.page
+        this.totalItems = res.totalItems
+        this.totalPages = res.totalPages
+        this.hasNext = res.hasNext
+      } catch (e) {
+        // The rows already on screen stay put; only the retry note appears.
+        this.loadMoreError = e.message || 'Failed to load products.'
+      } finally {
+        this.loadingMore = false
+      }
+    },
+    nextPage() { return this.goToPage(this.page + 1) },
+    prevPage() { return this.goToPage(this.page - 1) },
 
     /** Search / category / status change: reset paging, reload page 0. */
     async setSearch(value) {
